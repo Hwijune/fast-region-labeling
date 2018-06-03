@@ -1,0 +1,145 @@
+/***************************************************************************************
+ 영상처리 모듈								작성자 : 김봉근
+========================================================================================
+		설명 : 영역 레이블링시에 경계를 탐색한다(8방향).
+***************************************************************************************/
+void CKipsDoc::PeripheralHoleBoundaryTracking(int mode, int **memImage, int cr, int cc, int pixel, int label)
+{
+	int pdir = 0, ndir; // 이전탐색방향, 다음탐색방향
+	int r = cr; // row 좌표
+	int c = cc; // column 좌표
+	int d[8];
+	bool flag = false;
+
+	while(true) {
+		d[0] = memImage[r  ][c+1];
+		d[1] = memImage[r+1][c+1];
+		d[2] = memImage[r+1][c  ];
+		d[3] = memImage[r+1][c-1];
+		d[4] = memImage[r  ][c-1];
+		d[5] = memImage[r-1][c-1];
+		d[6] = memImage[r-1][c  ];
+		d[7] = memImage[r-1][c+1];
+		if(!d[0] && !d[1] && !d[2] && !d[3] && !d[4] && !d[5] && !d[6] && !d[7]) break;
+		// 마스크내의 탐색시작 방향 설정
+		ndir = pdir-3;
+		if(ndir == -1) ndir = 7;
+		else if(ndir == -2) ndir = 6;
+		else if(ndir == -3) ndir = 5;
+		// 마스크내의 탐색을 시계방향으로 수행
+		while(true)
+		{
+			if((d[ndir] == pixel) || (d[ndir] == label)) {
+				flag = false;
+				switch(pdir)
+				{
+					case 1 : if(ndir == 5) flag = true; break;
+					case 2 : if(ndir == 5 || ndir == 6) flag = true; break;
+					case 3 : if(ndir == 5 || ndir == 6 || ndir == 7) flag = true; break;
+					case 4 : if(ndir == 0 || ndir == 5 || ndir == 6 || ndir == 7) flag = true; break;
+					case 5 : if(ndir != 2 && ndir != 3 && ndir != 4) flag = true; break;
+					case 6 : if(ndir != 3 && ndir != 4) flag = true; break;
+					case 7 : if(ndir != 4) flag = true; break;
+				}
+				if(flag) memImage[r][c] = label;
+				pdir = ndir;
+				break;
+			}
+			else { // 다음 탐색방향 설정
+				ndir = ndir+1; if(ndir > 7) ndir = 0;
+			}
+		}
+		// 위치 이동.
+		switch(ndir)
+		{
+			case 0 : c++;		break;
+			case 1 : r++; c++;	break;
+			case 2 : r++;		break;
+			case 3 : r++; c--;	break;
+			case 4 : c--;		break;
+			case 5 : r--; c--;	break;
+			case 6 : r--;		break;
+			case 7 : r--; c++;	break;
+		}
+		if((r == cr) && (c == cc)) break;
+	}
+}
+
+/***************************************************************************************
+ 영상처리 모듈								작성자 : 김봉근
+========================================================================================
+		설명 : 이진영상에 대해 레이블링을 수행한다.
+***************************************************************************************/
+void CKipsDoc::OnRegionLabeling()
+{
+	if(AfxMessageBox("배경(검은색)과 물체(흰색)로 이진화된 이미지에 대해서만\n수행가능합니다. 계속 진행할까요?",
+		MB_YESNO) == IDNO) return;
+
+	CWaitCursor wait;			// Wait 마우스 커서
+
+	int maxX = image.GetWidth();
+	int maxY = image.GetHeight();
+
+	CImagePtr source(image);
+	
+	// 글로벌 메모리 할당, x, y좌표가 바뀜
+	int **memImage;
+	memImage = (int **)::GlobalAlloc(GMEM_FIXED, sizeof(int *)*maxY);
+	for(int i = 0; i < maxY; i++)
+		memImage[i] = (int *)::GlobalAlloc(GMEM_FIXED, sizeof(int)*maxX);
+	// 원 이미지를 메모리에 복사(음수로 만듬, 가장자리는 0으로 변환)
+	for(int y = 0; y < maxY; y++)
+	{
+		for(int x = 0; x < maxX; x++)
+		{
+			int c;
+			if(x == 0 || y == 0 || x == (maxX-1) || y == (maxY-1)) {
+				c = 0;
+			} else {
+				c = source.GetPixel(x, y);
+				if(c == 0) c = 0;
+				else c = -c;
+			}
+			memImage[y][x] = c;
+		}
+	}
+	// 영역 레이블링을 수행
+	int pixValue;
+	int label = 0;
+	for(int y = 1; y < maxY-1; y++)
+	{
+		for(int x = 1; x < maxX-1; x++)
+		{
+			pixValue = memImage[y][x];
+			if(memImage[y][x] < 0) 
+			{
+				if((memImage[y][x-1] <= 0) && (memImage[y-1][x-1] <= 0)) {
+					label++;
+					memImage[y][x] = label;
+					PeripheralHoleBoundaryTracking(1, memImage, y, x, pixValue, label);
+				} else if(memImage[y][x-1] > 0) {
+					memImage[y][x] = memImage[y][x-1];
+				} else if((memImage[y][x-1] <= 0) && (memImage[y-1][x-1] > 0)) {
+					memImage[y][x] = memImage[y-1][x-1];
+					PeripheralHoleBoundaryTracking(2, memImage, y, x, pixValue, memImage[y-1][x-1]);
+				}
+			}
+		}
+	}
+	// 레이블링된 각 영역을 적절한 색상으로 표현.
+	for(int y = 0; y < maxY; y++)
+	{
+		for(int x = 0; x < maxX; x++)
+		{
+			int c = memImage[y][x]*(255/(label+1)); // 레이블의 수에 따라 밝기값을 균등분할
+			if(c == 0) c = 255;
+			source.SetPixel(x, y, RGB(c,c,c));
+		}
+	}
+	Invalidate();
+
+	// 할당한 메모리 해제
+	for(int i = 0; i < maxY; i++)
+		::GlobalFree((HGLOBAL)memImage[i]);
+	::GlobalFree((HGLOBAL)memImage);
+}
